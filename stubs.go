@@ -33,13 +33,10 @@ func getg() *g
 // closure will be invalidated while it is still executing.
 func mcall(fn func(*g))
 
-// systemstack runs fn on a system stack.
-// If systemstack is called from the per-OS-thread (g0) stack, or
-// if systemstack is called from the signal handling (gsignal) stack,
-// systemstack calls fn directly and returns.
+// 在系统栈上执行传入的回调函数
+// 1. 如果当前为线程的g0栈或者信号处理栈上，则直接调用用户传入的回调函数
+// 2. 否则需要切换到当前线程栈上去执行fn，并最后切换回当前协程
 // Otherwise, systemstack is being called from the limited stack
-// of an ordinary goroutine. In this case, systemstack switches
-// to the per-OS-thread stack, calls fn, and switches back.
 // It is common to use a func literal as the argument, in order
 // to share inputs and outputs with the code around the call
 // to system stack:

@@ -250,6 +250,7 @@ func (mp *muintptr) set(m *m) { *mp = muintptr(unsafe.Pointer(m)) }
 func setMNoWB(mp **m, new *m) {
 	(*muintptr)(unsafe.Pointer(mp)).set(new)
 }
+
 //通常用于表示一个协程栈的状态
 type gobuf struct {
 	// The offsets of sp, pc, and g are known to (hard-coded in) libmach.
@@ -264,10 +265,10 @@ type gobuf struct {
 	// and restores it doesn't need write barriers. It's still
 	// typed as a pointer so that any other writes from Go get
 	// write barriers.
-	sp   uintptr //表示当前协程的sp栈顶
-	pc   uintptr //表示当前指令执行的地址，ip盘存器，表示当前指令执行到哪里了，可能在恢复的时候会恢复这个地址继续执行
-	g    guintptr//也许是指向协程的id吧
-	ctxt unsafe.Pointer//貌似说的是这个指针指向的内存在gc 栈扫描的时候默认当做根，所以一定会被标记为live对象，所以不需要采用写屏障
+	sp   uintptr        //表示当前协程的sp栈顶
+	pc   uintptr        //表示当前指令执行的地址，ip盘存器，表示当前指令执行到哪里了，可能在恢复的时候会恢复这个地址继续执行
+	g    guintptr       //也许是指向协程的id吧
+	ctxt unsafe.Pointer //貌似说的是这个指针指向的内存在gc 栈扫描的时候默认当做根，所以一定会被标记为live对象，所以不需要采用写屏障
 	ret  sys.Uintreg
 	lr   uintptr
 	bp   uintptr // for GOEXPERIMENT=framepointer //表示栈基址吧
@@ -335,6 +336,7 @@ type stack struct {
 	lo uintptr
 	hi uintptr
 }
+
 //协程的主要结构体，通过go() => newproces() new 一个g的结构体
 type g struct {
 	// 栈参数，某个协程拥有的栈空间上限
@@ -348,17 +350,17 @@ type g struct {
 	stackguard0 uintptr // offset known to liblink
 	stackguard1 uintptr // offset known to liblink
 
-	_panic         *_panic // innermost panic - offset known to liblink
-	_defer         *_defer // innermost defer
-	m              *m      // 每个协程g所属的线程m  current m; offset known to arm liblink
-	sched          gobuf   //记录了运行时的栈信息，例如恢复协程时的下一条控制指令
-	syscallsp      uintptr //系统调用 的sp寄存器信息       // if status==Gsyscall, syscallsp = sched.sp to use during gc
-	syscallpc      uintptr //系统调用的 pc rip信息       // if status==Gsyscall, syscallpc = sched.pc to use during gc
+	_panic         *_panic        // innermost panic - offset known to liblink
+	_defer         *_defer        // innermost defer
+	m              *m             // 每个协程g所属的线程m  current m; offset known to arm liblink
+	sched          gobuf          //记录了运行时的栈信息，例如恢复协程时的下一条控制指令
+	syscallsp      uintptr        //系统调用 的sp寄存器信息       // if status==Gsyscall, syscallsp = sched.sp to use during gc
+	syscallpc      uintptr        //系统调用的 pc rip信息       // if status==Gsyscall, syscallpc = sched.pc to use during gc
 	stktopsp       uintptr        // expected sp at top of stack, to check in traceback
 	param          unsafe.Pointer // passed parameter on wakeup
 	atomicstatus   uint32
 	stackLock      uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
-	goid           int64   //每一个协程都对应一个协程id
+	goid           int64  //每一个协程都对应一个协程id
 	schedlink      guintptr
 	waitsince      int64      // approx time when the g become blocked
 	waitreason     waitReason // if status==Gwaiting
@@ -400,6 +402,7 @@ type g struct {
 	// determines how this corresponds to scan work debt.
 	gcAssistBytes int64
 }
+
 //一个m表示一个ilnux线程，在启动时通过go.maxproces指定最大的线程，目前版本已经没有最大线程的上限了
 type m struct {
 	g0      *g     // 当前线程绑定了的协程，表示持有的协程 goroutine with scheduling stack
@@ -470,6 +473,7 @@ type m struct {
 
 	mOS
 }
+
 //GPM 中的p 管理者协程队列
 type p struct {
 	lock mutex
@@ -492,8 +496,8 @@ type p struct {
 	goidcacheend uint64
 
 	// Queue of runnable goroutines. Accessed without lock.
-	runqhead uint32// P持有的本地队列，在多线程环境下无需加锁就能 快速的调度运行空闲的协程
-	runqtail uint32// 队列尾部
+	runqhead uint32        // P持有的本地队列，在多线程环境下无需加锁就能 快速的调度运行空闲的协程
+	runqtail uint32        // 队列尾部
 	runq     [256]guintptr // 本地队列
 	// runnext, if non-nil, is a runnable G that was ready'd by
 	// the current G and should be run next instead of what's in
@@ -504,9 +508,9 @@ type p struct {
 	// unit and eliminates the (potentially large) scheduling
 	// latency that otherwise arises from adding the ready'd
 	// goroutines to the end of the run queue.
-	runnext guintptr//？ 指向下一个可运行的g
+	runnext guintptr //？ 指向下一个可运行的g
 
-	// Available G's (status == Gdead)
+	// 一些协程结束后，其协程栈会被重新复用 Available G's (status == Gdead)
 	gFree struct {
 		gList
 		n int32
@@ -551,6 +555,7 @@ type p struct {
 
 	pad cpu.CacheLinePad
 }
+
 //这个应该是一个全局调度器
 type schedt struct {
 	// accessed atomically. keep at top to ensure alignment on 32-bit systems.

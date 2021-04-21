@@ -3229,40 +3229,41 @@ func malg(stacksize int32) *g {
 	return newg
 }
 
-// Create a new g running fn with siz bytes of arguments.
-// Put it on the queue of g's waiting to run.
-// The compiler turns a go statement into a call to this.
-// Cannot split the stack because it assumes that the arguments
-// are available sequentially after &fn; they would not be
-// copied if a stack split occurred.
+// 创建一个协程，用来运行传入的带有siz字节参数的函数
+// 将协程push到队列里 等待调度运行
+// 不能进行栈切分，因为函数参数需要拷贝，如果栈分裂的话可能fn后面的参数不完整了
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
+	//总的来说这里是编译器来调用的newproc方法，第一个参数siz 指明了调用函数fn的参数大小
+	//NOTICE: 参数全部是存放在栈上的，所以通过fn后面的偏移量+参数大小就可以完整的拷贝函数参数了
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
+	//stack: [size,fn,arg1,arg2,arg3....] size 指明了arg1..argn的栈范围大小
 	gp := getg()
+	//获取调用方的下个指令地址，一般用于设置ip寄存器用于表示下一行代码该执行哪
 	pc := getcallerpc()
 	systemstack(func() {
 		newproc1(fn, (*uint8)(argp), siz, gp, pc)
 	})
 }
 
-// Create a new g running fn with narg bytes of arguments starting
-// at argp. callerpc is the address of the go statement that created
-// this. The new g is put on the queue of g's waiting to run.
+// 在系统栈、g0栈上创建                                                                                                                                      uu一个协程
+// 1. 拷贝参数到协程里
+// 2. 初始化基本信息如，调用方的下一行代码地址，ip寄存器
+// 3. 将协程推入全局列表等待调度
 func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintptr) {
+	//从tls中获取线程对应的协程
 	_g_ := getg()
 
 	if fn == nil {
 		_g_.m.throwing = -1 // do not dump full stacks
 		throw("go of nil func value")
 	}
+	//防止线程被抢占了
 	_g_.m.locks++ // disable preemption because it can be holding p in a local var
 	siz := narg
+	//进行8字节对齐
 	siz = (siz + 7) &^ 7
-
-	// We could allocate a larger initial stack if necessary.
-	// Not worth it: this is almost always an error.
-	// 4*sizeof(uintreg): extra space added below
-	// sizeof(uintreg): caller's LR (arm) or return address (x86, in gostartcall).
+	//参数不能太大了 超过2048字节左右就会被限制
 	if siz >= _StackMin-4*sys.RegSize-sys.RegSize {
 		throw("newproc: function arguments too large for new goroutine")
 	}
@@ -3271,7 +3272,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	//复用已经被释放了的g
 	newg := gfget(_p_)
 	if newg == nil {
-		//立即创建一个协程+协程栈
+		//立即创建一个协程+ 2k协程栈
 		newg = malg(_StackMin)
 		//将g转换为dead状态
 		casgstatus(newg, _Gidle, _Gdead)
@@ -3317,6 +3318,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	}
 
 	memclrNoHeapPointers(unsafe.Pointer(&newg.sched), unsafe.Sizeof(newg.sched))
+	//初始化时 记录了协程内当前栈顶 和 基栈
 	newg.sched.sp = sp
 	newg.stktopsp = sp
 	newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum so that previous instruction is in same function
@@ -3324,6 +3326,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	gostartcallfn(&newg.sched, fn)
 	newg.gopc = callerpc
 	newg.ancestors = saveAncestors(callergp)
+	//协程内需要执行的代码指令地址，初始化时指向了函数的首地址,而在后面的生命周期中 会不断调度切换后会变化
 	newg.startpc = fn.fn
 	if _g_.m.curg != nil {
 		newg.labels = _g_.m.curg.labels
@@ -3350,13 +3353,17 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	if trace.enabled {
 		traceGoCreate(newg, newg.startpc)
 	}
+	//将协程投递到本地队列或者全局队列等待调度器调度
 	runqput(_p_, newg, true)
 
 	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 && mainStarted {
 		wakep()
 	}
+	//恢复抢占功能
 	_g_.m.locks--
+	//顺便检查下，如果当前需要抢占则处理抢占
 	if _g_.m.locks == 0 && _g_.preempt { // restore the preemption request in case we've cleared it in newstack
+		//编译器在函数调用的时候会检查是否栈溢出，这里巧妙的利用栈溢出来实现抢占
 		_g_.stackguard0 = stackPreempt
 	}
 }
@@ -3430,13 +3437,15 @@ func gfput(_p_ *p, gp *g) {
 	}
 }
 
-// Get from gfree list.
-// If local list is empty, grab a batch from global list.
+// 从本地p的gfree空闲列表上获取一个协程
+// 或者从全局列表上获取
 func gfget(_p_ *p) *g {
 retry:
+	//如果本地p为空，且全局有空闲的则直接从全局空闲链表上获取一个使用
 	if _p_.gFree.empty() && (!sched.gFree.stack.empty() || !sched.gFree.noStack.empty()) {
 		lock(&sched.gFree.lock)
 		// Move a batch of free Gs to the P.
+		//顺便从全局队列中去负载一点空余的协程到本地p，避免频繁加锁获取
 		for _p_.gFree.n < 32 {
 			// Prefer Gs with stacks.
 			gp := sched.gFree.stack.pop()
@@ -3453,11 +3462,13 @@ retry:
 		unlock(&sched.gFree.lock)
 		goto retry
 	}
+	//本地队列有空余的 直接 从本地找一个空闲的协程
 	gp := _p_.gFree.pop()
 	if gp == nil {
 		return nil
 	}
 	_p_.gFree.n--
+	//如果没有协程栈 则需要去分配一个栈内存
 	if gp.stack.lo == 0 {
 		// Stack was deallocated in gfput. Allocate a new one.
 		systemstack(func() {
@@ -4748,6 +4759,8 @@ func runqempty(_p_ *p) bool {
 // assumptions.
 const randomizeScheduler = raceenabled
 
+// 尝试将协程追加到本地队列
+// 如果本地队列满了则插入全局队列里等待调度
 // runqput tries to put g on the local runnable queue.
 // If next is false, runqput adds g to the tail of the runnable queue.
 // If next is true, runqput puts g in the _p_.runnext slot.

@@ -307,17 +307,14 @@ func stackcache_clear(c *mcache) {
 	unlock(&stackpoolmu)
 }
 
-// stackalloc allocates an n byte stack.
-//
-// stackalloc must run on the system stack because it uses per-P
-// resources and must not split the stack.
-//
+// 分配一个栈内存，必须在系统栈上分配
 //go:systemstack
 func stackalloc(n uint32) stack {
 	// Stackalloc must be called on scheduler stack, so that we
 	// never try to grow the stack during the code that stackalloc runs.
 	// Doing so would cause a deadlock (issue 1547).
 	thisg := getg()
+	//必须在g0上面分配
 	if thisg != thisg.m.g0 {
 		throw("stackalloc not on scheduler stack")
 	}
@@ -330,7 +327,7 @@ func stackalloc(n uint32) stack {
 
 	if debug.efence != 0 || stackFromSystem != 0 {
 		n = uint32(round(uintptr(n), physPageSize))
-		//栈也是通过 直接mmap分配的固定内存，无需通过虚拟内存那套机制
+		//栈也是通过 直接mmap分配的固定内存，无需通过虚拟内存那套机制,不走全局heap、arena管理
 		v := sysAlloc(uintptr(n), &memstats.stacks_sys)
 		if v == nil {
 			throw("out of memory (stackalloc)")
