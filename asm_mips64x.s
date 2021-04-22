@@ -164,24 +164,24 @@ TEXT runtime·systemstack_switch(SB), NOSPLIT, $0-0
 TEXT runtime·systemstack(SB), NOSPLIT, $0-8
 	MOVV	fn+0(FP), R1	// R1 = fn
 	MOVV	R1, REGCTXT		// context
-	MOVV	g_m(g), R2	// R2 = m
+	MOVV	g_m(g), R2	// R2 = m 获取当前g对应的线程m， g->m
 
-	MOVV	m_gsignal(R2), R3	// R3 = gsignal
-	BEQ	g, R3, noswitch
+	MOVV	m_gsignal(R2), R3	// R3 = gsignal  获取线程绑定的 信号协程 m->gsignal
+	BEQ	g, R3, noswitch         // 如果当前协程是信号协程 则不用进行切换
 
-	MOVV	m_g0(R2), R3	// R3 = g0
-	BEQ	g, R3, noswitch
+	MOVV	m_g0(R2), R3	// R3 = g0 获取当前线程绑定的g0协程 m->g0
+	BEQ	g, R3, noswitch         //如果当前协程为g0则不用切换  g==g0
 
-	MOVV	m_curg(R2), R4
+	MOVV	m_curg(R2), R4      //否则就需要进行切换了
 	BEQ	g, R4, switch
 
 	// Bad: g is not gsignal, not g0, not curg. What is it?
-	// Hide call from linker nosplit analysis.
+	// Hide call from linker nosplit analysis. 异常情况，即 curg->m->curg != curg 这个样子
 	MOVV	$runtime·badsystemstack(SB), R4
 	JAL	(R4)
 	JAL	runtime·abort(SB)
 
-switch:
+switch:  //说明当前是非g0或者gsignal协程 需要进行切换到线程栈上执行函数
 	// save our state in g->sched. Pretend to
 	// be systemstack_switch if the G stack is scanned.
 	MOVV	$runtime·systemstack_switch(SB), R4
@@ -191,9 +191,9 @@ switch:
 	MOVV	R0, (g_sched+gobuf_lr)(g)
 	MOVV	g, (g_sched+gobuf_g)(g)
 
-	// switch to g0
+	// switch to g0 这里就要开始切到g0协程了,R3寄存器里保存的是上面已经计算好的g0协程(r3 = m->g0)
 	MOVV	R3, g
-	JAL	runtime·save_g(SB)
+	JAL	runtime·save_g(SB) //这里就要保存当前的上下文，准备要进行切换了
 	MOVV	(g_sched+gobuf_sp)(g), R1
 	// make it look like mstart called systemstack on g0, to stop traceback
 	ADDV	$-8, R1
@@ -201,15 +201,15 @@ switch:
 	MOVV	R2, 0(R1)
 	MOVV	R1, R29
 
-	// call target function
+	// call target function  REGTXT 保存的传入的函数指针
 	MOVV	0(REGCTXT), R4	// code pointer
-	JAL	(R4)
+	JAL	(R4)//跳转到目标函数，实现函数调用
 
-	// switch back to g
-	MOVV	g_m(g), R1
-	MOVV	m_curg(R1), g
-	JAL	runtime·save_g(SB)
-	MOVV	(g_sched+gobuf_sp)(g), R29
+	// switch back to g  //g0栈执行完函数后，在切换回用户协程
+	MOVV	g_m(g), R1   //R1 = g0->m
+	MOVV	m_curg(R1), g // g = m->curg
+	JAL	runtime·save_g(SB)//保存上下文
+	MOVV	(g_sched+gobuf_sp)(g), R29//
 	MOVV	R0, (g_sched+gobuf_sp)(g)
 	RET
 

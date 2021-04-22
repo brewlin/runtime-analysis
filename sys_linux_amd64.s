@@ -538,27 +538,27 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 
 // int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
 TEXT runtime·clone(SB),NOSPLIT,$0
-	MOVL	flags+0(FP), DI
-	MOVQ	stk+8(FP), SI
-	MOVQ	$0, DX
+	MOVL	flags+0(FP), DI // 第一个参数
+	MOVQ	stk+8(FP), SI   // 第二个参数
+	MOVQ	$0, DX          // 第三个参数
 	MOVQ	$0, R10
 
 	// Copy mp, gp, fn off parent stack for use by child.
 	// Careful: Linux system call clobbers CX and R11.
-	MOVQ	mp+16(FP), R8
-	MOVQ	gp+24(FP), R9
+	MOVQ	mp+16(FP), R8       //第五个参数
+	MOVQ	gp+24(FP), R9       //第六个参数
 	MOVQ	fn+32(FP), R12
 
-	MOVL	$SYS_clone, AX
+	MOVL	$SYS_clone, AX  // 进行系统调用 唇膏就线程
 	SYSCALL
 
-	// In parent, return.
+	// In parent, return. // ==0 父类 则返回
 	CMPQ	AX, $0
 	JEQ	3(PC)
 	MOVL	AX, ret+40(FP)
 	RET
 
-	// In child, on new stack.
+	// In child, on new stack. //子进程则是新的线程栈上运行
 	MOVQ	SI, SP
 
 	// If g or m are nil, skip Go-related setup.
@@ -586,7 +586,7 @@ nog:
 	// Call fn
 	CALL	R12
 
-	// It shouldn't return. If it does, exit that thread.
+	// It shouldn't return. If it does, exit that thread. 线程内结束了声明周期，调用exit 退出
 	MOVL	$111, DI
 	MOVL	$SYS_exit, AX
 	SYSCALL

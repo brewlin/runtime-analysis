@@ -26,7 +26,7 @@ nocgo:
 	RET
 
 TEXT runtime·save_g(SB),NOSPLIT,$0
-	MOVB	runtime·iscgo(SB), R0
+	MOVB	runtime·iscgo(SB), R0 //检查是否是cgo调用
 	CMP	$0, R0
 	BEQ	nocgo
 
@@ -35,7 +35,7 @@ TEXT runtime·save_g(SB),NOSPLIT,$0
 	// Darwin sometimes returns unaligned pointers
 	AND	$0xfffffffffffffff8, R0
 #endif
-	MOVD	runtime·tls_g(SB), R27
+	MOVD	runtime·tls_g(SB), R27 //获取当前g
 	ADD	R27, R0
 	MOVD	g, 0(R0)
 

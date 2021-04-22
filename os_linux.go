@@ -143,7 +143,7 @@ func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 // May run with m.p==nil, so write barriers are not allowed.
 //go:nowritebarrier
 func newosproc(mp *m) {
-	stk := unsafe.Pointer(mp.g0.stack.hi)
+	stk := unsafe.Pointer(mp.g0.stack.hi) //拿到g0的栈
 	/*
 	 * note: strace gets confused if we use CLONE_PTRACE here.
 	 */
@@ -155,6 +155,8 @@ func newosproc(mp *m) {
 	// with signals disabled. It will enable them in minit.
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
+	//这里可以看到线程用的是g0的栈，基于g0的栈创建的线程
+	//
 	ret := clone(cloneFlags, stk, unsafe.Pointer(mp), unsafe.Pointer(mp.g0), unsafe.Pointer(funcPC(mstart)))
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 
@@ -314,10 +316,10 @@ func mpreinit(mp *m) {
 
 func gettid() uint32
 
-// Called to initialize a new m (including the bootstrap m).
+// 初始化新创建的线程
 // Called on the new thread, cannot allocate memory.
 func minit() {
-	minitSignals()
+	minitSignals() //处理信号方面的东西
 
 	// for debuggers, in case cgo created the thread
 	getg().m.procid = uint64(gettid())

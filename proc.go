@@ -593,6 +593,7 @@ func checkmcount() {
 	}
 }
 
+//新创建的m 线程，一些通用初始化操作
 func mcommoninit(mp *m) {
 	_g_ := getg()
 
@@ -1140,8 +1141,8 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 	return startTime
 }
 
-// Called to start an M.
-//
+// 系统创建一个线程后开始执行当前方法
+// 1. 虽然是系统线程，但是却运行在g0栈上的，并不是系统线程栈上
 // This must not split the stack because we may not even have stack
 // bounds set up yet.
 //
@@ -1183,7 +1184,7 @@ func mstart() {
 
 func mstart1() {
 	_g_ := getg()
-
+	//线程初始化的时候 就是默认是已g0的身份在运行，线程栈也是g0栈，两个指向同一份内存，都是通过mmap像系统申请的
 	if _g_ != _g_.m.g0 {
 		throw("bad runtime·mstart")
 	}
@@ -1197,19 +1198,20 @@ func mstart1() {
 	minit()
 
 	// Install signal handlers; after minit so that minit can
-	// prepare the thread to be able to handle the signals.
+	// prepare the thread to be able to handle the signals. m0在windows下或者cgo 下需要特殊处理
 	if _g_.m == &m0 {
 		mstartm0()
 	}
-
+	//开始执行创建线程传入的函数，例如sysmon
 	if fn := _g_.m.mstartfn; fn != nil {
 		fn()
 	}
-
+	//将当前线程的p设置好
 	if _g_.m != &m0 {
 		acquirep(_g_.m.nextp.ptr())
 		_g_.m.nextp = 0
 	}
+	//进行线程调度
 	schedule()
 }
 
@@ -1464,8 +1466,11 @@ type cgothreadstart struct {
 //go:yeswritebarrierrec
 func allocm(_p_ *p, fn func()) *m {
 	_g_ := getg()
-	_g_.m.locks++ // disable GC because it can be called from sysmon
+	_g_.m.locks++ // 线程加锁 disable GC because it can be called from sysmon
 	if _g_.m.p == 0 {
+		//这个借用p的逻辑是这样的
+		//首先我们的目的是创建一个新的m 线程，但是初始化的时候一些g0、g0栈等信息需要用到 新线程的p
+		//但是我们确实在当前线程初始化的，所以需要临时将当前p换成将要创建的新的线程m->p
 		acquirep(_p_) // temporarily borrow p for mallocs in this function
 	}
 
@@ -1496,16 +1501,16 @@ func allocm(_p_ *p, fn func()) *m {
 	// In case of cgo or Solaris or Darwin, pthread_create will make us a stack.
 	// Windows and Plan 9 will layout sched stack on OS stack.
 	if iscgo || GOOS == "solaris" || GOOS == "windows" || GOOS == "plan9" || GOOS == "darwin" {
-		mp.g0 = malg(-1)
+		mp.g0 = malg(-1) //不申请栈内存,默认把线程栈当做g0栈？
 	} else {
-		mp.g0 = malg(8192 * sys.StackGuardMultiplier)
+		mp.g0 = malg(8192 * sys.StackGuardMultiplier) // 申请一份足够大的栈内存作为g0栈
 	}
 	mp.g0.m = mp
-
+	//借用结束了，线程m必要的内存初始化也结束了，恢复当前p
 	if _p_ == _g_.m.p.ptr() {
 		releasep()
 	}
-	_g_.m.locks--
+	_g_.m.locks--                        //恢复抢占逻辑
 	if _g_.m.locks == 0 && _g_.preempt { // restore the preemption request in case we've cleared it in newstack
 		_g_.stackguard0 = stackPreempt
 	}
@@ -1841,7 +1846,7 @@ func newm(fn func(), _p_ *p) {
 }
 
 func newm1(mp *m) {
-	if iscgo {
+	if iscgo { //如果cgo调用 可能会利用pthread创建一个线程
 		var ts cgothreadstart
 		if _cgo_thread_start == nil {
 			throw("_cgo_thread_start missing")
@@ -2106,8 +2111,8 @@ func startlockedm(gp *g) {
 	stopm()
 }
 
-// Stops the current m for stopTheWorld.
-// Returns when the world is restarted.
+// 停止当前线程 在stw期间
+// stw恢复后 返回
 func gcstopm() {
 	_g_ := getg()
 
@@ -2122,10 +2127,10 @@ func gcstopm() {
 			throw("gcstopm: negative nmspinning")
 		}
 	}
-	_p_ := releasep()
-	lock(&sched.lock)
-	_p_.status = _Pgcstop
-	sched.stopwait--
+	_p_ := releasep()     // 剥离 当前 P 和 M的联系
+	lock(&sched.lock)     // 获取全局锁 这个会阻塞线程导致线程会被系统切出去
+	_p_.status = _Pgcstop //修改p的状态 为gcStop
+	sched.stopwait--      //修改stw的线程数，gc stw阶段直到stopwait==0时表示 stw成功
 	if sched.stopwait == 0 {
 		notewakeup(&sched.stopnote)
 	}
@@ -2464,11 +2469,11 @@ func injectglist(glist *gList) {
 	*glist = gList{}
 }
 
-// One round of scheduler: find a runnable goroutine and execute it.
-// Never returns.
+// 一轮调度 ，找到可运行的协程并执行它
+// 不需要返回
 func schedule() {
 	_g_ := getg()
-
+	//说明当前线程在其他地方已经被锁住了
 	if _g_.m.locks != 0 {
 		throw("schedule: holding locks")
 	}
@@ -2485,7 +2490,7 @@ func schedule() {
 	}
 
 top:
-	if sched.gcwaiting != 0 {
+	if sched.gcwaiting != 0 { //在gc启动的时候 stw阶段会修改每个m状态 迫使stw
 		gcstopm()
 		goto top
 	}
@@ -2502,25 +2507,28 @@ top:
 			traceGoUnpark(gp, 0)
 		}
 	}
+	//在gc并发标记阶段，优先找到后台标记任务协程 唤醒去执行并发标记
 	if gp == nil && gcBlackenEnabled != 0 {
 		gp = gcController.findRunnableGCWorker(_g_.m.p.ptr())
 	}
 	if gp == nil {
 		// Check the global runnable queue once in a while to ensure fairness.
 		// Otherwise two goroutines can completely occupy the local runqueue
-		// by constantly respawning each other.
+		// by constantly respawning each other. 为了保证公平，会去全局队列回去一个协程来执行
 		if _g_.m.p.ptr().schedtick%61 == 0 && sched.runqsize > 0 {
 			lock(&sched.lock)
 			gp = globrunqget(_g_.m.p.ptr(), 1)
 			unlock(&sched.lock)
 		}
 	}
+	//从本地队列中获取来执行
 	if gp == nil {
 		gp, inheritTime = runqget(_g_.m.p.ptr())
 		if gp != nil && _g_.m.spinning {
 			throw("schedule: spinning with local work")
 		}
 	}
+	//再次去寻找可运行的协程
 	if gp == nil {
 		gp, inheritTime = findrunnable() // blocks until work is available
 	}
