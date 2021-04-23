@@ -3,7 +3,8 @@
 // license that can be found in the LICENSE file.
 
 #include "textflag.h"
-
+//操作系统装载二进制程序可执行elf程序时，读取elf头部elf->e_entry 的地址，也就是下面的函数
+//开始执行用户代码指令
 TEXT _rt0_amd64_linux(SB),NOSPLIT,$-8
 	JMP	_rt0_amd64(SB)
 

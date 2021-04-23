@@ -11,6 +11,7 @@
 // internal linking. This is the entry point for the program from the
 // kernel for an ordinary -buildmode=exe program. The stack holds the
 // number of arguments and the C-style argv.
+// 装载程序时 立即调用了当前程序，将argc参数个数存入di寄存器，将argv参数地址存入si寄存器
 TEXT _rt0_amd64(SB),NOSPLIT,$-8
 	MOVQ	0(SP), DI	// argc
 	LEAQ	8(SP), SI	// argv
@@ -83,11 +84,11 @@ DATA _rt0_amd64_lib_argc<>(SB)/8, $0
 GLOBL _rt0_amd64_lib_argc<>(SB),NOPTR, $8
 DATA _rt0_amd64_lib_argv<>(SB)/8, $0
 GLOBL _rt0_amd64_lib_argv<>(SB),NOPTR, $8
-
+//程序装载后jmp了两次到达这里
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// copy arguments forward on an even stack
-	MOVQ	DI, AX		// argc
-	MOVQ	SI, BX		// argv
+	MOVQ	DI, AX		// ax寄存器存放 argc参数个数
+	MOVQ	SI, BX		// bx寄存器存放 argv参数地址
 	SUBQ	$(4*8+7), SP		// 2args 2auto
 	ANDQ	$~15, SP
 	MOVQ	AX, 16(SP)

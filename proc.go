@@ -2138,7 +2138,7 @@ func gcstopm() {
 	stopm()
 }
 
-// Schedules gp to run on the current M.
+// 调度协程gp在当前线程m上运行
 // If inheritTime is true, gp inherits the remaining time in the
 // current time slice. Otherwise, it starts a new time slice.
 // Never returns.
