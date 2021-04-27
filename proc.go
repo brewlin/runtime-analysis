@@ -107,6 +107,7 @@ var runtimeInitTime int64
 var initSigmask sigset
 
 // The main goroutine.
+//第一个被创建的协程执行的方法，也就是main主协程
 func main() {
 	g := getg()
 
@@ -117,15 +118,15 @@ func main() {
 	// Max stack size is 1 GB on 64-bit, 250 MB on 32-bit.
 	// Using decimal instead of binary GB and MB because
 	// they look nicer in the stack overflow failure message.
-	if sys.PtrSize == 8 {
+	if sys.PtrSize == 8 { //根据平台设置最大的栈大小
 		maxstacksize = 1000000000
 	} else {
 		maxstacksize = 250000000
 	}
 
-	// Allow newproc to start new Ms.
+	// Allow newproc to start new Ms. 主协程没有启动的话 是不允许其他协程被创建的
 	mainStarted = true
-
+	//这个时候单独启动一个线程作为后台监控线程
 	if GOARCH != "wasm" { // no threads on wasm yet, so no sysmon
 		systemstack(func() {
 			newm(sysmon, nil)
@@ -143,8 +144,8 @@ func main() {
 	if g.m != &m0 {
 		throw("runtime.main not on m0")
 	}
-
-	runtime_init() // must be before defer
+	//必须在defer前运行runtime初始化
+	runtime_init() //其实就是 init() 函数 创建一个协程去定时检查gc
 	if nanotime() == 0 {
 		throw("nanotime returning zero")
 	}
@@ -159,7 +160,7 @@ func main() {
 
 	// Record when the world started.
 	runtimeInitTime = nanotime()
-
+	//创建一个后台清扫协程
 	gcenable()
 
 	main_init_done = make(chan bool)
@@ -196,6 +197,7 @@ func main() {
 		// has a main, but it is not executed.
 		return
 	}
+	//调用用户代码的 main入口函数
 	fn = main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
 	fn()
 	if raceenabled {
@@ -523,6 +525,7 @@ func cpuinit() {
 //	call runtime·mstart
 //
 // The new G calls runtime·main.
+// 程序装载启动时，初始化调度器以及相关环境
 func schedinit() {
 	// raceinit must be the first call to race detector.
 	// In particular, it must be done before mallocinit below calls racemapshadow.
@@ -534,9 +537,9 @@ func schedinit() {
 	sched.maxmcount = 10000
 
 	tracebackinit()
-	moduledataverify()
-	stackinit()
-	mallocinit()
+	moduledataverify() //一些链接信息的校验，例如bss段，data段，等
+	stackinit()        //初始两个双向链表 管理span用于栈分配
+	mallocinit()       //初始化全局malloc
 	mcommoninit(_g_.m)
 	cpuinit()       // must run before alginit
 	alginit()       // maps must not be used before this call
@@ -546,17 +549,18 @@ func schedinit() {
 
 	msigsave(_g_.m)
 	initSigmask = _g_.m.sigmask
-
+	//初始化全局参数
 	goargs()
 	goenvs()
 	parsedebugvars()
-	gcinit()
+	gcinit() //初始化一些gc算法和默认参数
 
 	sched.lastpoll = uint64(nanotime())
 	procs := ncpu
 	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
 		procs = n
 	}
+	//创建对应核心数的处理器
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")
 	}
@@ -2664,17 +2668,20 @@ func goexit1() {
 	if trace.enabled {
 		traceGoEnd()
 	}
-	mcall(goexit0)
+	mcall(goexit0) //gorun -> goexit -> go0(goexit0) 总之在协程执行完成后会切换到系统栈收尾刚才的协程
 }
 
+// 每个协程结束后，会切换到g0栈上去执行收尾工作
+// 当前一定是在g0栈上被调用的
 // goexit continuation on g0.
 func goexit0(gp *g) {
 	_g_ := getg()
-
+	//将协程标记为已结束 ，已挂掉
 	casgstatus(gp, _Grunning, _Gdead)
-	if isSystemGoroutine(gp, false) {
+	if isSystemGoroutine(gp, false) { //判断一下是否是系统协程
 		atomic.Xadd(&sched.ngsys, -1)
 	}
+	//将gp对应的信息都清空，等待重复利用
 	gp.m = nil
 	locked := gp.lockedm != 0
 	gp.lockedm = 0
@@ -2711,7 +2718,7 @@ func goexit0(gp *g) {
 		print("invalid m->lockedInt = ", _g_.m.lockedInt, "\n")
 		throw("internal lockOSThread error")
 	}
-	gfput(_g_.m.p.ptr(), gp)
+	gfput(_g_.m.p.ptr(), gp) // 将g插入空闲列表等待重复利用
 	if locked {
 		// The goroutine may have locked this thread because
 		// it put it in an unusual kernel state. Kill it
@@ -3331,7 +3338,7 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callergp *g, callerpc uintpt
 	newg.stktopsp = sp
 	newg.sched.pc = funcPC(goexit) + sys.PCQuantum // +PCQuantum so that previous instruction is in same function
 	newg.sched.g = guintptr(unsafe.Pointer(newg))
-	gostartcallfn(&newg.sched, fn)
+	gostartcallfn(&newg.sched, fn) //这里会关联goexit函数，在协程主入口执行结束后会跳转到返回地址return_address （sp)获得，实现继续函数调用
 	newg.gopc = callerpc
 	newg.ancestors = saveAncestors(callergp)
 	//协程内需要执行的代码指令地址，初始化时指向了函数的首地址,而在后面的生命周期中 会不断调度切换后会变化
@@ -4269,17 +4276,19 @@ func checkdead() {
 // This is a variable for testing purposes. It normally doesn't change.
 var forcegcperiod int64 = 2 * 60 * 1e9
 
-// Always runs without a P, so write barriers are not allowed.
-//
+// 独立的后台监控线程，不需要P的参与
+// 1. 监测网络事件 10ms内不检测 ，如果有事件则唤醒对应的协程
+// 2. 检查是否有协程长期占用cpu，有则抢占
+// 3. 扫描一次heap，看看是否能释放一些空间
 //go:nowritebarrierrec
 func sysmon() {
+	//锁住全局调度器进行死锁检查
 	lock(&sched.lock)
 	sched.nmsys++
 	checkdead()
 	unlock(&sched.lock)
 
-	// If a heap span goes unused for 5 minutes after a garbage collection,
-	// we hand it back to the operating system.
+	//如果一个堆内存距离上一次gc后已经查过5分钟没有使用了则需要归还给操作系统释放系统压力
 	scavengelimit := int64(5 * 60 * 1e9)
 
 	if debug.scavenge > 0 {
@@ -4292,9 +4301,9 @@ func sysmon() {
 	nscavenge := 0
 
 	lasttrace := int64(0)
-	idle := 0 // how many cycles in succession we had not wokeup somebody
+	idle := 0 // 记录连续多少次都没有唤醒事件的次数  ，防止空跑cpu
 	delay := uint32(0)
-	for {
+	for { //进行死循环不断监控
 		if idle == 0 { // start with 20us sleep...
 			delay = 20
 		} else if idle > 50 { // start doubling the sleep after 1ms...
@@ -4303,7 +4312,7 @@ func sysmon() {
 		if delay > 10*1000 { // up to 10ms
 			delay = 10 * 1000
 		}
-		usleep(delay)
+		usleep(delay) //睡眠cpu 让系统来调度出去
 		if debug.schedtrace <= 0 && (sched.gcwaiting != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs)) {
 			lock(&sched.lock)
 			if atomic.Load(&sched.gcwaiting) != 0 || atomic.Load(&sched.npidle) == uint32(gomaxprocs) {
@@ -4342,11 +4351,13 @@ func sysmon() {
 		if *cgo_yield != nil {
 			asmcgocall(*cgo_yield, nil)
 		}
+		//如果距离是上一次网络事件 距离隔10ms 则需要做一些操作
 		// poll network if not polled for more than 10ms
 		lastpoll := int64(atomic.Load64(&sched.lastpoll))
 		now := nanotime()
 		if netpollinited() && lastpoll != 0 && lastpoll+10*1000*1000 < now {
 			atomic.Cas64(&sched.lastpoll, uint64(lastpoll), uint64(now))
+			//非阻塞 返回触发事件的协程
 			list := netpoll(false) // non-blocking - returns list of goroutines
 			if !list.empty() {
 				// Need to decrement number of idle locked M's
@@ -4361,14 +4372,14 @@ func sysmon() {
 				incidlelocked(1)
 			}
 		}
-		// retake P's blocked in syscalls
+		// retake P's blocked in syscalls  抢占一些长时间占用cpu的G
 		// and preempt long running G's
 		if retake(now) != 0 {
 			idle = 0
 		} else {
 			idle++
 		}
-		// check if we need to force a GC
+		// check if we need to force a GC 检查是否需要强制进行一轮gc
 		if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && atomic.Load(&forcegc.idle) != 0 {
 			lock(&forcegc.lock)
 			forcegc.idle = 0
@@ -4377,7 +4388,7 @@ func sysmon() {
 			injectglist(&list)
 			unlock(&forcegc.lock)
 		}
-		// scavenge heap once in a while
+		// scavenge heap once in a while 进行一次清除扫描
 		if lastscavenge+scavengelimit/2 < now {
 			mheap_.scavenge(int32(nscavenge), uint64(now), uint64(scavengelimit))
 			lastscavenge = now

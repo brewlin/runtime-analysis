@@ -7,19 +7,14 @@
 #include "funcdata.h"
 #include "textflag.h"
 
-// _rt0_amd64 is common startup code for most amd64 systems when using
-// internal linking. This is the entry point for the program from the
-// kernel for an ordinary -buildmode=exe program. The stack holds the
-// number of arguments and the C-style argv.
-// 装载程序时 立即调用了当前程序，将argc参数个数存入di寄存器，将argv参数地址存入si寄存器
+// 内部链接时
+// 装载程序时 这里作为程序入口，将argc参数个数存入di寄存器，将argv参数地址存入si寄存器
 TEXT _rt0_amd64(SB),NOSPLIT,$-8
 	MOVQ	0(SP), DI	// argc
 	LEAQ	8(SP), SI	// argv
 	JMP	runtime·rt0_go(SB)
 
-// main is common startup code for most amd64 systems when using
-// external linking. The C startup code will call the symbol "main"
-// passing argc and argv in the usual C ABI registers DI and SI.
+// 作为外部链接时，c启动时会自动调用main函数
 TEXT main(SB),NOSPLIT,$-8
 	JMP	runtime·rt0_go(SB)
 
@@ -29,6 +24,7 @@ TEXT main(SB),NOSPLIT,$-8
 // c-archive) or when the shared library is loaded (for c-shared).
 // We expect argc and argv to be passed in the usual C ABI registers
 // DI and SI.
+// 当作为静态库或者动态库使用时
 TEXT _rt0_amd64_lib(SB),NOSPLIT,$0x50
 	// Align stack per ELF ABI requirements.
 	MOVQ	SP, AX
@@ -84,31 +80,32 @@ DATA _rt0_amd64_lib_argc<>(SB)/8, $0
 GLOBL _rt0_amd64_lib_argc<>(SB),NOPTR, $8
 DATA _rt0_amd64_lib_argv<>(SB)/8, $0
 GLOBL _rt0_amd64_lib_argv<>(SB),NOPTR, $8
+
 //程序装载后jmp了两次到达这里
 TEXT runtime·rt0_go(SB),NOSPLIT,$0
 	// copy arguments forward on an even stack
 	MOVQ	DI, AX		// ax寄存器存放 argc参数个数
 	MOVQ	SI, BX		// bx寄存器存放 argv参数地址
-	SUBQ	$(4*8+7), SP		// 2args 2auto
+	SUBQ	$(4*8+7), SP		// 大致是在栈上开辟4个变量 每个变量8字节 2args 2auto
 	ANDQ	$~15, SP
-	MOVQ	AX, 16(SP)
-	MOVQ	BX, 24(SP)
+	MOVQ	AX, 16(SP) // 将argc 赋值给 16(sp) 变量
+	MOVQ	BX, 24(SP) // 将argv 赋值给 24(sp) 变量
 
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
-	MOVQ	$runtime·g0(SB), DI
+	MOVQ	$runtime·g0(SB), DI //大致是初始化 g0 栈
 	LEAQ	(-64*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard0(DI)
 	MOVQ	BX, g_stackguard1(DI)
 	MOVQ	BX, (g_stack+stack_lo)(DI)
 	MOVQ	SP, (g_stack+stack_hi)(DI)
 
-	// find out information about the processor we're on
+	//大致是获取当前处理器的cpu信息
 	MOVL	$0, AX
 	CPUID
 	MOVL	AX, SI
 	CMPL	AX, $0
-	JE	nocpuinfo
+	JE	nocpuinfo ///获取失败了，获取cpu信息失败了
 
 	// Figure out how to serialize RDTSC.
 	// On Intel processors LFENCE is enough. AMD requires MFENCE.
@@ -129,7 +126,7 @@ notintel:
 	MOVL	AX, runtime·processorVersionInfo(SB)
 
 nocpuinfo:
-	// if there is an _cgo_init, call it.
+	// if there is an _cgo_init, call it. //如果这里有_cgo_init函数被设置的话 需要主动调用
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX
 	JZ	needtls
@@ -138,7 +135,7 @@ nocpuinfo:
 	MOVQ	$setg_gcc<>(SB), SI
 	CALL	AX
 
-	// update stackguard after _cgo_init
+	// update stackguard after _cgo_init 更新g0栈的相关信息
 	MOVQ	$runtime·g0(SB), CX
 	MOVQ	(g_stack+stack_lo)(CX), AX
 	ADDQ	$const__StackGuard, AX
@@ -176,7 +173,7 @@ ok:
 	// set the per-goroutine and per-mach "registers"
 	get_tls(BX)
 	LEAQ	runtime·g0(SB), CX
-	MOVQ	CX, g(BX)
+	MOVQ	CX, g(BX) //将g0设置到 tls中，每次getg() 获取的就是g0
 	LEAQ	runtime·m0(SB), AX
 
 	// save m->g0 = g0
@@ -185,26 +182,26 @@ ok:
 	MOVQ	AX, g_m(CX)
 
 	CLD				// convention is D is always left cleared
-	CALL	runtime·check(SB)
-
+	CALL	runtime·check(SB) //做一些基础检查 平台是否兼容等
+    //构造函数调用的参数入栈
 	MOVL	16(SP), AX		// copy argc
 	MOVL	AX, 0(SP)
 	MOVQ	24(SP), AX		// copy argv
 	MOVQ	AX, 8(SP)
 	CALL	runtime·args(SB)
 	CALL	runtime·osinit(SB)
-	CALL	runtime·schedinit(SB)
+	CALL	runtime·schedinit(SB) //比较繁杂的调度器初始化，内池初始化，处理器初始化，参数初始化等
 
 	// create a new goroutine to start program
-	MOVQ	$runtime·mainPC(SB), AX		// entry
+	MOVQ	$runtime·mainPC(SB), AX		// mainPC 可能是链接阶段 将main函数的地址设置给了它
 	PUSHQ	AX
 	PUSHQ	$0			// arg size
-	CALL	runtime·newproc(SB)
+	CALL	runtime·newproc(SB)   //创建第一个协程运行 runtime.main()函数
 	POPQ	AX
 	POPQ	AX
 
 	// start this M
-	CALL	runtime·mstart(SB)
+	CALL	runtime·mstart(SB) //当前直接调用mstart 处理m的逻辑读取可用的协程执行,而其他情况下一般是创建新线程才会执行mstart
 
 	CALL	runtime·abort(SB)	// mstart should never return
 	RET
@@ -249,55 +246,54 @@ TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	MOVQ	BX, gobuf_g(AX)
 	RET
 
-// func gogo(buf *gobuf)
-// restore state from Gobuf; longjmp
+// func gogo(buf *gobuf) 进行协程切换，buf就是目标函数的上下文信息
+// restore state from Gobuf; longjmp 切换的时候采用长跳转指令
 TEXT runtime·gogo(SB), NOSPLIT, $16-8
-	MOVQ	buf+0(FP), BX		// gobuf
-	MOVQ	gobuf_g(BX), DX
+	MOVQ	buf+0(FP), BX		// bx = gobuf
+	MOVQ	gobuf_g(BX), DX     // dx = g
 	MOVQ	0(DX), CX		// make sure g != nil
 	get_tls(CX)
-	MOVQ	DX, g(CX)
-	MOVQ	gobuf_sp(BX), SP	// restore SP
-	MOVQ	gobuf_ret(BX), AX
-	MOVQ	gobuf_ctxt(BX), DX
-	MOVQ	gobuf_bp(BX), BP
-	MOVQ	$0, gobuf_sp(BX)	// clear to help garbage collector
-	MOVQ	$0, gobuf_ret(BX)
-	MOVQ	$0, gobuf_ctxt(BX)
-	MOVQ	$0, gobuf_bp(BX)
-	MOVQ	gobuf_pc(BX), BX
-	JMP	BX
+	MOVQ	DX, g(CX)       // 将目标g 设置为当前线程 tls->g
+	MOVQ	gobuf_sp(BX), SP	// restore SP  恢复sp栈顶指针 $rsp = gobuf.sp 实现栈切换
+	MOVQ	gobuf_ret(BX), AX  // ax = gobuf.ret
+	MOVQ	gobuf_ctxt(BX), DX // dx = gobuf.ctxt 上下文信息
+	MOVQ	gobuf_bp(BX), BP    // 恢复bp寄存器  $rbp = gobuf->bp 栈基指针 执行当前函数开始位置
+	MOVQ	$0, gobuf_sp(BX)	// 清除sp clear to help garbage collector
+	MOVQ	$0, gobuf_ret(BX)   // 清除ret
+	MOVQ	$0, gobuf_ctxt(BX)  // 清除ctxt
+	MOVQ	$0, gobuf_bp(BX)    // 清除bp
+	MOVQ	gobuf_pc(BX), BX    // 准备跳转到目标函数 实现栈切换
+	JMP	BX                      // never return 的意义在于，在目标函数执行完以后会在返回时调用我们提前设置好的goexit函数，里面会再次调用schedule进行循环调度
 
 // func mcall(fn func(*g))
-// Switch to m->g0's stack, call fn(g).
-// Fn must never return. It should gogo(&g->sched)
-// to keep running g.
+// 切换到g0栈上去执行 目标函数
+// fn函数同时也是一个永不return的函数，那岂不是栈会溢出？其实不然，g0栈每次被切换的时候都会恢复到默认的地方不会开辟新栈，所以没有问题
 TEXT runtime·mcall(SB), NOSPLIT, $0-8
-	MOVQ	fn+0(FP), DI
+	MOVQ	fn+0(FP), DI //di = fn
 
 	get_tls(CX)
-	MOVQ	g(CX), AX	// save state in g->sched
-	MOVQ	0(SP), BX	// caller's PC
-	MOVQ	BX, (g_sched+gobuf_pc)(AX)
-	LEAQ	fn+0(FP), BX	// caller's SP
-	MOVQ	BX, (g_sched+gobuf_sp)(AX)
-	MOVQ	AX, (g_sched+gobuf_g)(AX)
-	MOVQ	BP, (g_sched+gobuf_bp)(AX)
+	MOVQ	g(CX), AX	// ax = g 获取当前gsave state in g->sched
+	MOVQ	0(SP), BX	// bx = 0(sp) 调用者的下一行执行代码 caller's PC
+	MOVQ	BX, (g_sched+gobuf_pc)(AX)  // g->sched->pc = pc  保存了切换到g0之前的pc
+	LEAQ	fn+0(FP), BX	// bx = sp caller's SP
+	MOVQ	BX, (g_sched+gobuf_sp)(AX) // g->sched->sp = sp   保存了调用方的栈顶指针
+	MOVQ	AX, (g_sched+gobuf_g)(AX)  // g->sched->g  = g    保存将要被切出去的协程
+	MOVQ	BP, (g_sched+gobuf_bp)(AX) // g->sched->bp  = bp  保存栈基指针
 
-	// switch to m->g0 & its stack, call fn
-	MOVQ	g(CX), BX
-	MOVQ	g_m(BX), BX
-	MOVQ	m_g0(BX), SI
-	CMPQ	SI, AX	// if g == m->g0 call badmcall
+	// switch to m->g0 & its stack, call fn //准备切换到g0了
+	MOVQ	g(CX), BX                  // bx = getg()
+	MOVQ	g_m(BX), BX                // bx = g->m
+	MOVQ	m_g0(BX), SI               // si = m->g0
+	CMPQ	SI, AX	// 判断一下当前是否已经处于g0栈上面了 if g == m->g0 call badmcall
 	JNE	3(PC)
 	MOVQ	$runtime·badmcall(SB), AX
 	JMP	AX
-	MOVQ	SI, g(CX)	// g = m->g0
-	MOVQ	(g_sched+gobuf_sp)(SI), SP	// sp = m->g0->sched.sp
-	PUSHQ	AX
-	MOVQ	DI, DX
+	MOVQ	SI, g(CX)	// getg() = g0  先替换全局tls g为g0
+	MOVQ	(g_sched+gobuf_sp)(SI), SP	// sp = m->g0->sched.sp 恢复g0的栈顶指针实现切换
+	PUSHQ	AX          // ax 是上一个待销毁的协程  si 是g0协程 入栈作为函数参数，接下来就要调用用户函数了
+	MOVQ	DI, DX      // di 保存了待执行的函数
 	MOVQ	0(DI), DI
-	CALL	DI
+	CALL	DI          //在g0栈上调用用户传入的函数
 	POPQ	AX
 	MOVQ	$runtime·badmcall2(SB), AX
 	JMP	AX

@@ -201,6 +201,7 @@ var addrspace_vec [1]byte
 
 func mincore(addr unsafe.Pointer, n uintptr, dst *byte) int32
 
+// 将命令行参数拷贝到全局参数
 func sysargs(argc int32, argv **byte) {
 	n := argc + 1
 

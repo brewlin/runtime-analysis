@@ -180,7 +180,7 @@ type mheap struct {
 	// spaced CacheLinePadSize bytes apart, so that each mcentral.lock
 	// gets its own cache line.
 	// central is indexed by spanClass.
-	central [numSpanClasses]struct {  //中央空闲链表数组 采用 2*67个空间来存储多尺寸对象，一半存储指针对象 另一半存储非指针对象
+	central [numSpanClasses]struct { //中央空闲链表数组 采用 2*67个空间来存储多尺寸对象，一半存储指针对象 另一半存储非指针对象
 		mcentral mcentral
 		pad      [cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize]byte
 	}
@@ -196,7 +196,7 @@ type mheap struct {
 	unused *specialfinalizer // never set, just here to force the specialfinalizer type into DWARF
 }
 
-var mheap_ mheap  //全局堆，持有所有的堆内存，管理所有内存
+var mheap_ mheap //全局堆，持有所有的堆内存，管理所有内存
 
 // A heapArena stores metadata for a heap arena. heapArenas are stored
 // outside of the Go heap and accessed via the mheap_.arenas index.
@@ -615,7 +615,7 @@ const (
 	tinySpanClass  = spanClass(tinySizeClass<<1 | 1)
 )
 
-func 	makeSpanClass(sizeclass uint8, noscan bool) spanClass {
+func makeSpanClass(sizeclass uint8, noscan bool) spanClass {
 	return spanClass(sizeclass<<1) | spanClass(bool2int(noscan))
 }
 
@@ -775,6 +775,9 @@ func pageIndexOf(p uintptr) (arena *heapArena, pageIdx uintptr, pageMask uint8) 
 
 // Initialize the heap. 初始化这个堆
 func (h *mheap) init() {
+	//下面的这些结构体都是固定内存分配器
+	//也就是说内存分配单独走 mmap分配，不关联虚拟内存以及全局的heaparena内存
+	//单独就是给一些固定不需要gc的内存独立做的分配器
 	h.treapalloc.init(unsafe.Sizeof(treapNode{}), nil, nil, &memstats.other_sys)
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
 	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
@@ -792,7 +795,7 @@ func (h *mheap) init() {
 	h.spanalloc.zero = false
 
 	// h->mapcache needs no init
-
+	//把全局中心链表清空格式化
 	for i := range h.central {
 		h.central[i].mcentral.init(spanClass(i))
 	}
@@ -1147,7 +1150,7 @@ func (h *mheap) allocSpanLocked(npage uintptr, stat *uint64) *mspan {
 		goto HaveSpan
 	}
 	// On failure, grow the heap and try again.
-	if !h.grow(npage) {  //当前heap堆内存不够了 需要从系统申请 擦混如页数
+	if !h.grow(npage) { //当前heap堆内存不够了 需要从系统申请 擦混如页数
 		return nil
 	}
 	s = h.pickFreeSpan(npage)
@@ -1217,9 +1220,9 @@ HaveSpan:
 // returning whether it worked.
 //
 // h must be locked.
-func (h *mheap) grow(npage uintptr) bool {  //扩充堆
-	ask := npage << _PageShift				//将页数转换为字节大小  page *= 4k(4096| << 13) 每页大小为4k
-	v, size := h.sysAlloc(ask)				//向系统申请内存
+func (h *mheap) grow(npage uintptr) bool { //扩充堆
+	ask := npage << _PageShift //将页数转换为字节大小  page *= 4k(4096| << 13) 每页大小为4k
+	v, size := h.sysAlloc(ask) //向系统申请内存
 	if v == nil {
 		print("runtime: out of memory: cannot allocate ", ask, "-byte block (", memstats.heap_sys, " in use)\n")
 		return false

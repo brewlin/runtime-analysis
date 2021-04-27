@@ -57,6 +57,7 @@ func argv_index(argv **byte, i int32) *byte {
 	return *(**byte)(add(unsafe.Pointer(argv), uintptr(i)*sys.PtrSize))
 }
 
+//将命令行参数 拷贝到全局变量
 func args(c int32, v **byte) {
 	argc = c
 	argv = v
@@ -133,6 +134,7 @@ func testAtomic64() {
 	}
 }
 
+// 程序启动的时候 做的一些基础检查
 func check() {
 	var (
 		a     int8

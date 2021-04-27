@@ -127,7 +127,7 @@ const (
 
 	concurrentSweep = _ConcurrentSweep
 
-	_PageSize = 1 << _PageShift   // 每页大小为8k =  1 << 13  = 2^13
+	_PageSize = 1 << _PageShift // 每页大小为8k =  1 << 13  = 2^13
 	_PageMask = _PageSize - 1
 
 	// _64bit = 1 on 64-bit systems, 0 on 32-bit systems
@@ -324,38 +324,9 @@ const (
 // mallocinit.
 var physPageSize uintptr
 
-// OS-defined helpers:
-//
-// sysAlloc obtains a large chunk of zeroed memory from the
-// operating system, typically on the order of a hundred kilobytes
-// or a megabyte.
-// NOTE: sysAlloc returns OS-aligned memory, but the heap allocator
-// may use larger alignment, so the caller must be careful to realign the
-// memory obtained by sysAlloc.
-//
-// sysUnused notifies the operating system that the contents
-// of the memory region are no longer needed and can be reused
-// for other purposes.
-// sysUsed notifies the operating system that the contents
-// of the memory region are needed again.
-//
-// sysFree returns it unconditionally; this is only used if
-// an out-of-memory error has been detected midway through
-// an allocation. It is okay if sysFree is a no-op.
-//
-// sysReserve reserves address space without allocating memory.
-// If the pointer passed to it is non-nil, the caller wants the
-// reservation there, but sysReserve can still choose another
-// location if that one is unavailable.
-// NOTE: sysReserve returns OS-aligned memory, but the heap allocator
-// may use larger alignment, so the caller must be careful to realign the
-// memory obtained by sysAlloc.
-//
-// sysMap maps previously reserved address space for use.
-//
-// sysFault marks a (already sysAlloc'd) region to fault
-// if accessed. Used only for debugging the runtime.
-
+// 核心内存初始化工作
+// 初始化本地线程缓存
+// 初始化全局heap结构等
 func mallocinit() {
 	if class_to_size[_TinySizeClass] != _TinySize {
 		throw("bad TinySizeClass")
@@ -389,9 +360,9 @@ func mallocinit() {
 	}
 
 	// Initialize the heap.
-	mheap_.init()
+	mheap_.init() //初始化堆
 	_g_ := getg()
-	_g_.m.mcache = allocmcache()
+	_g_.m.mcache = allocmcache() //构建一个本地线程的 span缓存
 
 	// Create initial arena growth hints.
 	if sys.PtrSize == 8 && GOARCH != "wasm" {
@@ -533,7 +504,7 @@ func mallocinit() {
 //
 // h must be locked.
 func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) { //像系统申请内存
-	n = round(n, heapArenaBytes)//进行字节对齐操作
+	n = round(n, heapArenaBytes) //进行字节对齐操作
 
 	// First, try the arena pre-reservation.
 	v = h.arena.alloc(n, heapArenaBytes, &memstats.heap_sys) //首先尝试在预先保存的一块内存中分配
@@ -635,9 +606,9 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) { //像系�
 mapped: //管理刚刚申请的空间 创建一个新的arena来管理
 	// Create arena metadata.
 	println(v)
-	println("before",v,arenaIndex(uintptr(v)),arenaIndex(uintptr(v)+size-1))
+	println("before", v, arenaIndex(uintptr(v)), arenaIndex(uintptr(v)+size-1))
 	for ri := arenaIndex(uintptr(v)); ri <= arenaIndex(uintptr(v)+size-1); ri++ {
-	println(ri)
+		println(ri)
 		l2 := h.arenas[ri.l1()]
 		if l2 == nil {
 			// Allocate an L2 arena map.
@@ -810,8 +781,8 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 // Small objects are allocated from the per-P cache's free lists.
 // Large objects (> 32 kB) are allocated straight from the heap.
 func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要的分配逻辑
-	println("mallocgc",size)
-	if gcphase == _GCmarktermination {   //为啥要加上这个呢，gc结束了就可以分配内存了呀
+	println("mallocgc", size)
+	if gcphase == _GCmarktermination { //为啥要加上这个呢，gc结束了就可以分配内存了呀
 		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
 
@@ -850,10 +821,10 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要
 
 	// Set mp.mallocing to keep from being preempted by GC. 设置一个标志位，防止被gc抢占
 	mp := acquirem()
-	if mp.mallocing != 0 {//表示有死锁产生
+	if mp.mallocing != 0 { //表示有死锁产生
 		throw("malloc deadlock")
 	}
-	if mp.gsignal == getg() {//如果当前m绑定的信号处理协程 == 当前malloc的协程 则说明在信号处理期间有内存分配的异常情况
+	if mp.gsignal == getg() { //如果当前m绑定的信号处理协程 == 当前malloc的协程 则说明在信号处理期间有内存分配的异常情况
 		throw("malloc during signal")
 	}
 	mp.mallocing = 1 //设置mp.mallocing = 1 表示当前线程m正在进行 mallocing
@@ -863,7 +834,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要
 	c := gomcache() //获取当前线程m绑定的 mcache
 	var x unsafe.Pointer
 	noscan := typ == nil || typ.kind&kindNoPointers != 0 //这里就是分配的重要的一个分支，辨别当前要分配的对象是否在后续gc扫描对象的时候需要进一步扫描引用
-	if size <= maxSmallSize { //小于32k走默认内存分配
+	if size <= maxSmallSize {                            //小于32k走默认内存分配
 		if noscan && size < maxTinySize {
 			// Tiny allocator.
 			//
@@ -960,7 +931,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要
 	}
 
 	var scanSize uintptr
-	if !noscan {//说明当前申请的对象是不需要进行扫描的: gc 子引用扫描
+	if !noscan { //说明当前申请的对象是不需要进行扫描的: gc 子引用扫描
 		// If allocating a defer+arg block, now that we've picked a malloc size
 		// large enough to hold everything, cut the "asked for" size down to
 		// just the defer header, so that the GC bitmap will record the arg block
@@ -996,7 +967,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要
 	// All slots hold nil so no scanning is needed.
 	// This may be racing with GC so do it atomically if there can be
 	// a race marking the bit.
-	if gcphase != _GCoff {//gc还没结束的时候 是需要手动把新对象标记为活跃对象防止被gc
+	if gcphase != _GCoff { //gc还没结束的时候 是需要手动把新对象标记为活跃对象防止被gc
 		gcmarknewobject(uintptr(x), size, scanSize)
 	}
 
@@ -1008,8 +979,8 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要
 		msanmalloc(x, size)
 	}
 
-	mp.mallocing = 0   // 分配结束了
-	releasem(mp)	   //恢复线程m的相关状态
+	mp.mallocing = 0 // 分配结束了
+	releasem(mp)     //恢复线程m的相关状态
 
 	if debug.allocfreetrace != 0 {
 		tracealloc(x, size, typ)
@@ -1043,10 +1014,10 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer { //主要
 func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
 	// print("largeAlloc size=", size, "\n")
 
-	if size+_PageSize < size {//检测是否内存溢出
+	if size+_PageSize < size { //检测是否内存溢出
 		throw("out of memory")
 	}
-	npages := size >> _PageShift//计算页索引
+	npages := size >> _PageShift //计算页索引
 	if size&_PageMask != 0 {
 		npages++
 	}
@@ -1058,7 +1029,7 @@ func largeAlloc(size uintptr, needzero bool, noscan bool) *mspan {
 
 	s := mheap_.alloc(npages, makeSpanClass(0, noscan), true, needzero)
 	if s == nil {
-		throw("out of memory")//如果直接从全局堆上无法获取到内存块的话 就溢出了
+		throw("out of memory") //如果直接从全局堆上无法获取到内存块的话 就溢出了
 	}
 	s.limit = s.base() + size
 	heapBitsForAddr(s.base()).initSpan(s)

@@ -147,6 +147,8 @@ var stackLarge struct {
 	free [heapAddrBits - pageShift]mSpanList // free lists by log_2(s.npages)
 }
 
+//栈初始化栈
+// 两个双向链表来管理span的分配与重新利用
 func stackinit() {
 	if _StackCacheSize&_PageMask != 0 {
 		throw("cache size must be a multiple of page size")
