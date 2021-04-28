@@ -93,8 +93,8 @@ TEXT runtime·rt0_go(SB),NOSPLIT,$0
 
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
-	MOVQ	$runtime·g0(SB), DI //大致是初始化 g0 栈
-	LEAQ	(-64*1024+104)(SP), BX
+	MOVQ	$runtime·g0(SB), DI     //这里的g0是用的全局变量g0
+	LEAQ	(-64*1024+104)(SP), BX  //默认给g0 64k的栈大小，这个栈是当前第一个线程栈
 	MOVQ	BX, g_stackguard0(DI)
 	MOVQ	BX, g_stackguard1(DI)
 	MOVQ	BX, (g_stack+stack_lo)(DI)
@@ -171,14 +171,17 @@ needtls:
 	CALL	runtime·abort(SB)
 ok:
 	// set the per-goroutine and per-mach "registers"
+	// 接下来就是将g0和m0设置到tls中了
+	// 1. 主线程启动时候 g0，m0 用的主线程栈 g0,m0是存储在全局data段中
+	// 2. 程序初始化完成后新增的M和g都是通过heap分配的，只有第一个M0和g0特殊点
 	get_tls(BX)
-	LEAQ	runtime·g0(SB), CX
-	MOVQ	CX, g(BX) //将g0设置到 tls中，每次getg() 获取的就是g0
+	LEAQ	runtime·g0(SB), CX  // 这个时候g0 和 m0 都是全局data段的，主线程的g0和m0用的是进程空间
+	MOVQ	CX, g(BX) //tls->g = g0 将g0设置到 tls中，每次getg() 获取的就是g0
 	LEAQ	runtime·m0(SB), AX
 
-	// save m->g0 = g0
+	// save m0->g0 = g0   runtime.g0 已经保存到线程缓存g 了
 	MOVQ	CX, m_g0(AX)
-	// save m0 to g0->m
+	// save g0->m0 = m0   runtime.m0 将会保存到 tls->g->m 上 这下关系就明朗了
 	MOVQ	AX, g_m(CX)
 
 	CLD				// convention is D is always left cleared
@@ -210,7 +213,7 @@ ok:
 	// intended to be called by debuggers.
 	MOVQ	$runtime·debugCallV1(SB), AX
 	RET
-
+//mainPC,在链接过程中会指向 proc.main的地址
 DATA	runtime·mainPC+0(SB)/8,$runtime·main(SB)
 GLOBL	runtime·mainPC(SB),RODATA,$8
 
@@ -226,6 +229,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
  *  go-routine
  */
 
+//保存一下当前的栈帧 上下文等信息
 // func gosave(buf *gobuf)
 // save state in Gobuf; setjmp
 TEXT runtime·gosave(SB), NOSPLIT, $0-8
@@ -233,11 +237,11 @@ TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	LEAQ	buf+0(FP), BX		// caller's SP
 	MOVQ	BX, gobuf_sp(AX)
 	MOVQ	0(SP), BX		// caller's PC
-	MOVQ	BX, gobuf_pc(AX)
-	MOVQ	$0, gobuf_ret(AX)
-	MOVQ	BP, gobuf_bp(AX)
+	MOVQ	BX, gobuf_pc(AX) // buf->pc  = (%rsp) 保存当前的pc指针
+	MOVQ	$0, gobuf_ret(AX)// buf->ret = 0
+	MOVQ	BP, gobuf_bp(AX) // buf->bp  =  %rbp
 	// Assert ctxt is zero. See func save.
-	MOVQ	gobuf_ctxt(AX), BX
+	MOVQ	gobuf_ctxt(AX), BX // bx = buf->ctxt
 	TESTQ	BX, BX
 	JZ	2(PC)
 	CALL	runtime·badctxt(SB)
@@ -307,55 +311,54 @@ TEXT runtime·mcall(SB), NOSPLIT, $0-8
 TEXT runtime·systemstack_switch(SB), NOSPLIT, $0-0
 	RET
 
-// func systemstack(fn func())
+// 切换到g0栈上执行
 TEXT runtime·systemstack(SB), NOSPLIT, $0-8
 	MOVQ	fn+0(FP), DI	// DI = fn
 	get_tls(CX)
 	MOVQ	g(CX), AX	// AX = g
 	MOVQ	g_m(AX), BX	// BX = m
 
-	CMPQ	AX, m_gsignal(BX)
+	CMPQ	AX, m_gsignal(BX) //看看当前协程是不是信号协程，因为信号协程不需要切换
 	JEQ	noswitch
 
 	MOVQ	m_g0(BX), DX	// DX = g0
-	CMPQ	AX, DX
+	CMPQ	AX, DX          //看看是不是g0，如果是g0则不需要切换
 	JEQ	noswitch
 
 	CMPQ	AX, m_curg(BX)
 	JNE	bad
 
-	// switch stacks
-	// save our state in g->sched. Pretend to
-	// be systemstack_switch if the G stack is scanned.
+	// 说明需要切换到g0栈
+	// 保存上下文, pc， sp， bp 等基础信息，因为golang寄存器操作用的少所以不需要保存相关通用寄存器
 	MOVQ	$runtime·systemstack_switch(SB), SI
-	MOVQ	SI, (g_sched+gobuf_pc)(AX)
-	MOVQ	SP, (g_sched+gobuf_sp)(AX)
-	MOVQ	AX, (g_sched+gobuf_g)(AX)
-	MOVQ	BP, (g_sched+gobuf_bp)(AX)
+	MOVQ	SI, (g_sched+gobuf_pc)(AX)  // buf->sched->pc = systemstack_switch 保存了当前切换回来后需要执行的函数是systemstack_switch
+	MOVQ	SP, (g_sched+gobuf_sp)(AX)  // buf->sched->sp = %rsp 保存了当前的栈顶
+	MOVQ	AX, (g_sched+gobuf_g)(AX)   // buf->sched->g  = getg() 保存了当前的g
+	MOVQ	BP, (g_sched+gobuf_bp)(AX)  // buf->sched->bp = %rbp 保存了栈基指针
 
 	// switch to g0
-	MOVQ	DX, g(CX)
-	MOVQ	(g_sched+gobuf_sp)(DX), BX
+	MOVQ	DX, g(CX)                   //tls->g = g0  替换tls全局g 为g0
+	MOVQ	(g_sched+gobuf_sp)(DX), BX  //bx = g0->sched->sp
 	// make it look like mstart called systemstack on g0, to stop traceback
-	SUBQ	$8, BX
+	SUBQ	$8, BX                      // bx = bx-8 在开盘一个8字节栈
 	MOVQ	$runtime·mstart(SB), DX
-	MOVQ	DX, 0(BX)
-	MOVQ	BX, SP
+	MOVQ	DX, 0(BX)                   //将mstart函数作为返回地址放到sp栈顶上
+	MOVQ	BX, SP                      //切换到g0栈
 
 	// call target function
-	MOVQ	DI, DX
+	MOVQ	DI, DX                      //在g0栈上直接调用传入的回调函数fn
 	MOVQ	0(DI), DI
 	CALL	DI
 
 	// switch back to g
 	get_tls(CX)
-	MOVQ	g(CX), AX
-	MOVQ	g_m(AX), BX
-	MOVQ	m_curg(BX), AX
-	MOVQ	AX, g(CX)
-	MOVQ	(g_sched+gobuf_sp)(AX), SP
-	MOVQ	$0, (g_sched+gobuf_sp)(AX)
-	RET
+	MOVQ	g(CX), AX                   //ax = g0 获取g0
+	MOVQ	g_m(AX), BX                 //bx = g0->m
+	MOVQ	m_curg(BX), AX              //ax = g0->m->curg
+	MOVQ	AX, g(CX)                   //恢复之前的g 到 全局tls->g
+	MOVQ	(g_sched+gobuf_sp)(AX), SP  //恢复之前的sp栈顶
+	MOVQ	$0, (g_sched+gobuf_sp)(AX)  //将之前的sp置0
+	RET                                 //这里返回的时候回去调用上面之前设置的 systemstack_switch 函数，各平台会做一些特别的东西
 
 noswitch:
 	// already on m stack; tail call the function
