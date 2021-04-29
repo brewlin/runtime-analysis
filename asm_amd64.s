@@ -249,6 +249,10 @@ TEXT runtime·gosave(SB), NOSPLIT, $0-8
 	MOVQ	g(CX), BX
 	MOVQ	BX, gobuf_g(AX)
 	RET
+// 这里有个前置条件需要注意: 执行gogo进行协程切换的操作一般是在g0栈上执行的
+// 因为 go -> goexit -> g0(schedule) -> go  这个生命周期决定了不断的调度死循环
+// 1. 在执行gogo的时候发现没有保存当前的栈而是直接切换到目标协程栈正是这个原因
+// 2. 因为g0栈没有什么逻辑 每次都会被恢复到默认的初始栈重复利用 所以不会有栈溢出的问题
 
 // func gogo(buf *gobuf) 进行协程切换，buf就是目标函数的上下文信息
 // restore state from Gobuf; longjmp 切换的时候采用长跳转指令

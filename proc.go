@@ -619,7 +619,7 @@ func mcommoninit(mp *m) {
 	if mp.fastrand[0]|mp.fastrand[1] == 0 {
 		mp.fastrand[1] = 1
 	}
-
+	//创建一个信号协程+栈的结构体
 	mpreinit(mp)
 	if mp.gsignal != nil {
 		mp.gsignal.stackguard1 = mp.gsignal.stack.lo + _StackGuard
