@@ -605,8 +605,6 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) { //像系�
 
 mapped: //管理刚刚申请的空间 创建一个新的arena来管理
 	// Create arena metadata.
-	println(v)
-	println("before", v, arenaIndex(uintptr(v)), arenaIndex(uintptr(v)+size-1))
 	for ri := arenaIndex(uintptr(v)); ri <= arenaIndex(uintptr(v)+size-1); ri++ {
 		println(ri)
 		l2 := h.arenas[ri.l1()]
