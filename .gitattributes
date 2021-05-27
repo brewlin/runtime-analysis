@@ -1,0 +1,9 @@
+* linguist-vendored
+cgo/* linguist-vendored
+debug/* linguist-vendored
+docs/* linguist-vendored
+internal/* linguist-vendored
+msan/* linguist-vendored
+pprof/* linguist-vendored
+race/* linguist-vendored
+trace/* linguist-vendored
